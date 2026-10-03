@@ -1,12 +1,12 @@
 import os
+import subprocess
 import imageio_ffmpeg
 import gdown
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import edge_tts
-from moviepy import VideoFileClip, AudioFileClip, ImageClip, CompositeVideoClip
 from PIL import Image, ImageDraw
 
 ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
@@ -43,25 +43,30 @@ def ensure_video_downloaded(filename: str):
         gdown.download(url, filename, quiet=False)
 
 def create_reddit_card(title: str, text: str, output_path="reddit_card.png"):
-    img = Image.new('RGBA', (600, 250), color=(255, 255, 255, 240))
+    img = Image.new('RGBA', (1080, 450), color=(255, 255, 255, 240))
     draw = ImageDraw.Draw(img)
-    draw.text((20, 20), title, fill=(120, 120, 120))
+    draw.text((40, 40), title, fill=(120, 120, 120))
     short_text = text[:100] + "..." if len(text) > 100 else text
-    draw.text((20, 60), short_text, fill=(0, 0, 0))
+    draw.text((40, 120), short_text, fill=(0, 0, 0))
     img.save(output_path)
     return output_path
 
-async def render_task(req: GenerateRequest):
-    audio_clip = None
-    video_clip = None
-    card_clip = None
-    final_video = None
+@app.get("/")
+def home():
+    return {"status": "ok", "message": "Backend běží!"}
+
+@app.post("/generate-video")
+async def generate_video(req: GenerateRequest):
     try:
+        # 1. Generování zvuku z TTS
         audio_path = "tts_audio.mp3"
         communicate = edge_tts.Communicate(req.script_text, req.voice_id)
         await communicate.save(audio_path)
-        audio_clip = AudioFileClip(audio_path)
-        
+
+        # Zjistíme délku zvuku pomocí ffprobe/ffmpeg
+        # Pro zjednodušení použijeme přímo ffmpeg oříznutí podle audia (-shortest)
+
+        # 2. Výběr videa
         bg_url = req.bg_youtube_url.lower()
         if "subway" in bg_url:
             bg_file = "subway.mp4"
@@ -73,58 +78,38 @@ async def render_task(req: GenerateRequest):
         ensure_video_downloaded(bg_file)
 
         if not os.path.exists(bg_file):
-            return
+            return {"status": "error", "message": f"Video {bg_file} nenalezeno."}
 
-        video_clip = VideoFileClip(bg_file).subclipped(0, audio_clip.duration)
-        video_clip = video_clip.resized(height=480)
-
+        # 3. Vytvoření karty
         card_img_path = create_reddit_card(req.title_text, req.script_text)
-        card_duration = min(4.0, audio_clip.duration)
-        card_clip = (ImageClip(card_img_path)
-                     .with_duration(card_duration)
-                     .with_position("center"))
-        
-        final_video = CompositeVideoClip([video_clip, card_clip])
-        final_video = final_video.with_audio(audio_clip)
-        
+
         output_filename = "final_output.mp4"
         output_path = os.path.join("static", output_filename)
-        
-        # Smažeme starý výstup, abychom poznali, až bude nový hotový
-        if os.path.exists(output_path):
-            os.remove(output_path)
 
-        final_video.write_videofile(
-            output_path, 
-            codec="libx264", 
-            audio_codec="aac",
-            preset="ultrafast",
-            fps=24,
-            threads=1,
-            logger=None
-        )
+        # 4. Bleskový přímý FFmpeg příkaz (plné rozlišení 1080p bez zatížení RAM)
+        cmd = [
+            ffmpeg_path, "-y",
+            "-i", bg_file,
+            "-i", audio_path,
+            "-i", card_img_path,
+            "-filter_complex", "[0:v][2:v]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2:enable='between(t,0,4)'[v]",
+            "-map", "[v]",
+            "-map", 1:a,
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-c:a", "aac",
+            "-shortest",
+            output_path
+        ]
+
+        subprocess.run(cmd, check=True)
+
+        video_url = f"https://reddit-backend-n9fw.onrender.com/static/{output_filename}"
+
+        return {
+            "status": "success",
+            "message": "Video vygenerováno v HD!",
+            "video_url": video_url
+        }
     except Exception as e:
-        print("Chyba při renderu:", e)
-    finally:
-        for clip in [audio_clip, video_clip, card_clip, final_video]:
-            if clip is not None:
-                try:
-                    clip.close()
-                except Exception:
-                    pass
-
-@app.get("/")
-def home():
-    return {"status": "ok", "message": "Backend běží!"}
-
-@app.post("/generate-video")
-async def generate_video(req: GenerateRequest, background_tasks: BackgroundTasks):
-    # Spustí proces na pozadí, takže odpoví okamžitě bez chyby 524
-    background_tasks.add_task(render_task, req)
-    
-    video_url = "https://reddit-backend-n9fw.onrender.com/static/final_output.mp4"
-    return {
-        "status": "success",
-        "message": "Generování spuštěno na pozadí! Počkej cca 1–2 minuty a otevři video URL.",
-        "video_url": video_url
-    }
+        return {"status": "error", "message": str(e)}
