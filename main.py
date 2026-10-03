@@ -36,7 +36,7 @@ class GenerateRequest(BaseModel):
     bg_youtube_url: str = ""
     title_text: str = "r/AskReddit"
 
-def download_video(filename: str):
+def ensure_video_downloaded(filename: str):
     if not os.path.exists(filename) and filename in DRIVE_VIDEOS:
         file_id = DRIVE_VIDEOS[filename]
         url = f"https://drive.google.com/uc?id={file_id}"
@@ -57,6 +57,10 @@ def home():
 
 @app.post("/generate-video")
 async def generate_video(req: GenerateRequest):
+    audio_clip = None
+    video_clip = None
+    card_clip = None
+    final_video = None
     try:
         # 1. Generování zvuku z textu
         audio_path = "tts_audio.mp3"
@@ -64,7 +68,7 @@ async def generate_video(req: GenerateRequest):
         await communicate.save(audio_path)
         audio_clip = AudioFileClip(audio_path)
         
-        # 2. Určení videa
+        # 2. Výběr videa
         bg_url = req.bg_youtube_url.lower()
         if "subway" in bg_url:
             bg_file = "subway.mp4"
@@ -73,13 +77,14 @@ async def generate_video(req: GenerateRequest):
         else:
             bg_file = "minecraft.mp4"
 
-        download_video(bg_file)
+        ensure_video_downloaded(bg_file)
 
         if not os.path.exists(bg_file):
-            return {"status": "error", "message": f"Video {bg_file} se nepodařilo stáhnout."}
+            return {"status": "error", "message": f"Video {bg_file} nenalezeno."}
 
-        # Načtení videa a zkrácení
+        # Snížení nároků na RAM: úprava výšky na 480p a oříznutí
         video_clip = VideoFileClip(bg_file).subclipped(0, audio_clip.duration)
+        video_clip = video_clip.resized(height=480)
 
         # 3. Reddit karta
         card_img_path = create_reddit_card(req.title_text, req.script_text)
@@ -88,7 +93,7 @@ async def generate_video(req: GenerateRequest):
                      .with_duration(card_duration)
                      .with_position("center"))
         
-        # 4. Spojení a rychlý zápis
+        # 4. Spojení a rychlý export
         final_video = CompositeVideoClip([video_clip, card_clip])
         final_video = final_video.with_audio(audio_clip)
         
@@ -101,12 +106,9 @@ async def generate_video(req: GenerateRequest):
             audio_codec="aac",
             preset="ultrafast",
             fps=24,
-            threads=2,
+            threads=1,
             logger=None
         )
-        
-        audio_clip.close()
-        video_clip.close()
         
         video_url = f"https://reddit-backend-n9fw.onrender.com/static/{output_filename}"
         
@@ -117,3 +119,11 @@ async def generate_video(req: GenerateRequest):
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+    finally:
+        # Čištění paměti
+        for clip in [audio_clip, video_clip, card_clip, final_video]:
+            if clip is not None:
+                try:
+                    clip.close()
+                except Exception:
+                    pass
