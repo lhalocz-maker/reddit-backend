@@ -63,9 +63,6 @@ async def generate_video(req: GenerateRequest):
         communicate = edge_tts.Communicate(req.script_text, req.voice_id)
         await communicate.save(audio_path)
 
-        # Zjistíme délku zvuku pomocí ffprobe/ffmpeg
-        # Pro zjednodušení použijeme přímo ffmpeg oříznutí podle audia (-shortest)
-
         # 2. Výběr videa
         bg_url = req.bg_youtube_url.lower()
         if "subway" in bg_url:
@@ -86,7 +83,7 @@ async def generate_video(req: GenerateRequest):
         output_filename = "final_output.mp4"
         output_path = os.path.join("static", output_filename)
 
-        # 4. Bleskový přímý FFmpeg příkaz (plné rozlišení 1080p bez zatížení RAM)
+        # 4. Přímý FFmpeg příkaz v uvozovkách (opravená syntaxe pro 1080p kvalitu)
         cmd = [
             ffmpeg_path, "-y",
             "-i", bg_file,
@@ -94,7 +91,7 @@ async def generate_video(req: GenerateRequest):
             "-i", card_img_path,
             "-filter_complex", "[0:v][2:v]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2:enable='between(t,0,4)'[v]",
             "-map", "[v]",
-            "-map", 1:a,
+            "-map", "1:a",
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-c:a", "aac",
