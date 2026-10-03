@@ -3,5 +3,5 @@ uvicorn
 gdown
 edge-tts
 moviepy
-imageio[ffmpeg]
+imageio-ffmpeg
 pillow
