@@ -1,6 +1,6 @@
 fastapi
 uvicorn
-yt-dlp
+yt-dlp>=2024.08.06
 edge-tts
 moviepy
 imageio[ffmpeg]
