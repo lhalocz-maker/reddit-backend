@@ -36,7 +36,7 @@ class GenerateRequest(BaseModel):
     bg_youtube_url: str = ""
     title_text: str = "r/AskReddit"
 
-def ensure_video_downloaded(filename: str):
+def download_video(filename: str):
     if not os.path.exists(filename) and filename in DRIVE_VIDEOS:
         file_id = DRIVE_VIDEOS[filename]
         url = f"https://drive.google.com/uc?id={file_id}"
@@ -73,14 +73,13 @@ async def generate_video(req: GenerateRequest):
         else:
             bg_file = "minecraft.mp4"
 
-        ensure_video_downloaded(bg_file)
+        download_video(bg_file)
 
         if not os.path.exists(bg_file):
-            return {"status": "error", "message": f"Video {bg_file} nenalezeno."}
+            return {"status": "error", "message": f"Video {bg_file} se nepodařilo stáhnout."}
 
-        # Načtení videa a úprava rozlišení na 720p pro úsporu RAM
+        # Načtení videa a zkrácení
         video_clip = VideoFileClip(bg_file).subclipped(0, audio_clip.duration)
-        video_clip = video_clip.resized(height=720)
 
         # 3. Reddit karta
         card_img_path = create_reddit_card(req.title_text, req.script_text)
@@ -96,12 +95,12 @@ async def generate_video(req: GenerateRequest):
         output_filename = "final_output.mp4"
         output_path = os.path.join("static", output_filename)
         
-        # Ultrafast export pro eliminaci chyby 502/RAM
         final_video.write_videofile(
             output_path, 
             codec="libx264", 
             audio_codec="aac",
             preset="ultrafast",
+            fps=24,
             threads=2,
             logger=None
         )
