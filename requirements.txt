@@ -3,3 +3,4 @@ uvicorn
 yt-dlp
 edge-tts
 moviepy
+imageio[ffmpeg]
