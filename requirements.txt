@@ -1,9 +1,8 @@
 fastapi
 uvicorn
-yt-dlp>=2024.08.06
+yt-dlp
 edge-tts
 moviepy
 imageio[ffmpeg]
 pillow
-yt-dlp
 certifi
