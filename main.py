@@ -24,7 +24,6 @@ app.add_middleware(
 os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# ZDE SEM VLOŽ ID TVÝCH SOUBORŮ Z GOOGLE DRIVE
 DRIVE_VIDEOS = {
     "minecraft.mp4": "1Z4fdCjz7jcEt6m-aaLx1o3dc631CA81j",
     "subway.mp4": "1ceIBmGIcI077B6jbgUUMinFQYs0a8gX-",
@@ -44,11 +43,11 @@ def ensure_video_downloaded(filename: str):
         gdown.download(url, filename, quiet=False)
 
 def create_reddit_card(title: str, text: str, output_path="reddit_card.png"):
-    img = Image.new('RGBA', (800, 350), color=(255, 255, 255, 240))
+    img = Image.new('RGBA', (600, 250), color=(255, 255, 255, 240))
     draw = ImageDraw.Draw(img)
-    draw.text((30, 30), title, fill=(120, 120, 120))
-    short_text = text[:120] + "..." if len(text) > 120 else text
-    draw.text((30, 80), short_text, fill=(0, 0, 0))
+    draw.text((20, 20), title, fill=(120, 120, 120))
+    short_text = text[:100] + "..." if len(text) > 100 else text
+    draw.text((20, 60), short_text, fill=(0, 0, 0))
     img.save(output_path)
     return output_path
 
@@ -65,7 +64,7 @@ async def generate_video(req: GenerateRequest):
         await communicate.save(audio_path)
         audio_clip = AudioFileClip(audio_path)
         
-        # 2. Určení videa a stažení z GDrive pokud ještě na serveru není
+        # 2. Určení videa
         bg_url = req.bg_youtube_url.lower()
         if "subway" in bg_url:
             bg_file = "subway.mp4"
@@ -77,10 +76,12 @@ async def generate_video(req: GenerateRequest):
         ensure_video_downloaded(bg_file)
 
         if not os.path.exists(bg_file):
-            return {"status": "error", "message": f"Video {bg_file} se nepodařilo stáhnout z Google Drive."}
+            return {"status": "error", "message": f"Video {bg_file} nenalezeno."}
 
+        # Načtení videa a úprava rozlišení na 720p pro úsporu RAM
         video_clip = VideoFileClip(bg_file).subclipped(0, audio_clip.duration)
-        
+        video_clip = video_clip.resized(height=720)
+
         # 3. Reddit karta
         card_img_path = create_reddit_card(req.title_text, req.script_text)
         card_duration = min(4.0, audio_clip.duration)
@@ -88,13 +89,22 @@ async def generate_video(req: GenerateRequest):
                      .with_duration(card_duration)
                      .with_position("center"))
         
-        # 4. Spojení všeho
+        # 4. Spojení a rychlý zápis
         final_video = CompositeVideoClip([video_clip, card_clip])
         final_video = final_video.with_audio(audio_clip)
         
         output_filename = "final_output.mp4"
         output_path = os.path.join("static", output_filename)
-        final_video.write_videofile(output_path, codec="libx264", audio_codec="aac")
+        
+        # Ultrafast export pro eliminaci chyby 502/RAM
+        final_video.write_videofile(
+            output_path, 
+            codec="libx264", 
+            audio_codec="aac",
+            preset="ultrafast",
+            threads=2,
+            logger=None
+        )
         
         audio_clip.close()
         video_clip.close()
