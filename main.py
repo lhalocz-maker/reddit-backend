@@ -1,14 +1,14 @@
 import os
 import imageio_ffmpeg
+import gdown
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import edge_tts
-from moviepy import VideoFileClip, AudioFileClip
-import yt_dlp
+from moviepy import VideoFileClip, AudioFileClip, ImageClip, CompositeVideoClip
+from PIL import Image, ImageDraw
 
-# Nastavení cesty k FFmpeg pro MoviePy a yt-dlp
 ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
 
 app = FastAPI()
@@ -21,14 +21,36 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Složka pro ukládání vygenerovaných videí
 os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# ZDE SEM VLOŽ ID TVÝCH SOUBORŮ Z GOOGLE DRIVE
+DRIVE_VIDEOS = {
+    "minecraft.mp4": "1Z4fdCjz7jcEt6m-aaLx1o3dc631CA81j",
+    "subway.mp4": "1ceIBmGIcI077B6jbgUUMinFQYs0a8gX-",
+    "gta.mp4": "1K7OyVgX6cbv5rPJbjKjgWxt9OTl6uvUg"
+}
 
 class GenerateRequest(BaseModel):
     script_text: str
     voice_id: str = "en-US-ChristopherNeural"
-    bg_youtube_url: str
+    bg_youtube_url: str = ""
+    title_text: str = "r/AskReddit"
+
+def ensure_video_downloaded(filename: str):
+    if not os.path.exists(filename) and filename in DRIVE_VIDEOS:
+        file_id = DRIVE_VIDEOS[filename]
+        url = f"https://drive.google.com/uc?id={file_id}"
+        gdown.download(url, filename, quiet=False)
+
+def create_reddit_card(title: str, text: str, output_path="reddit_card.png"):
+    img = Image.new('RGBA', (800, 350), color=(255, 255, 255, 240))
+    draw = ImageDraw.Draw(img)
+    draw.text((30, 30), title, fill=(120, 120, 120))
+    short_text = text[:120] + "..." if len(text) > 120 else text
+    draw.text((30, 80), short_text, fill=(0, 0, 0))
+    img.save(output_path)
+    return output_path
 
 @app.get("/")
 def home():
@@ -37,45 +59,46 @@ def home():
 @app.post("/generate-video")
 async def generate_video(req: GenerateRequest):
     try:
+        # 1. Generování zvuku z textu
         audio_path = "tts_audio.mp3"
         communicate = edge_tts.Communicate(req.script_text, req.voice_id)
         await communicate.save(audio_path)
-        
-        raw_video = "bg_downloaded.mp4"
-        if os.path.exists(raw_video):
-            os.remove(raw_video)
-            
-      ydl_opts = {
-            'format': 'mp4',
-            'outtmpl': raw_video,
-            'ffmpeg_location': ffmpeg_path,
-            'quiet': True,
-            'no_warnings': True,
-            'nocheckcertificate': True,
-            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android', 'web']
-                }
-            }
-        }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([req.bg_youtube_url])
-            
         audio_clip = AudioFileClip(audio_path)
-        video_clip = VideoFileClip(raw_video).subclipped(0, audio_clip.duration)
         
-        final_clip = video_clip.with_audio(audio_clip)
+        # 2. Určení videa a stažení z GDrive pokud ještě na serveru není
+        bg_url = req.bg_youtube_url.lower()
+        if "subway" in bg_url:
+            bg_file = "subway.mp4"
+        elif "gta" in bg_url:
+            bg_file = "gta.mp4"
+        else:
+            bg_file = "minecraft.mp4"
+
+        ensure_video_downloaded(bg_file)
+
+        if not os.path.exists(bg_file):
+            return {"status": "error", "message": f"Video {bg_file} se nepodařilo stáhnout z Google Drive."}
+
+        video_clip = VideoFileClip(bg_file).subclipped(0, audio_clip.duration)
+        
+        # 3. Reddit karta
+        card_img_path = create_reddit_card(req.title_text, req.script_text)
+        card_duration = min(4.0, audio_clip.duration)
+        card_clip = (ImageClip(card_img_path)
+                     .with_duration(card_duration)
+                     .with_position("center"))
+        
+        # 4. Spojení všeho
+        final_video = CompositeVideoClip([video_clip, card_clip])
+        final_video = final_video.with_audio(audio_clip)
+        
         output_filename = "final_output.mp4"
         output_path = os.path.join("static", output_filename)
-        
-        final_clip.write_videofile(output_path, codec="libx264", audio_codec="aac")
+        final_video.write_videofile(output_path, codec="libx264", audio_codec="aac")
         
         audio_clip.close()
         video_clip.close()
         
-        # Odkaz na stažení hotového videa
         video_url = f"https://reddit-backend-n9fw.onrender.com/static/{output_filename}"
         
         return {
