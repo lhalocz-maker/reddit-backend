@@ -45,13 +45,13 @@ async def generate_video(req: GenerateRequest):
         if os.path.exists(raw_video):
             os.remove(raw_video)
             
-        ydl_opts = {
-            'format': 'bestvideo[ext=mp4][height<=1080]+bestaudio/best[ext=mp4]/best',
-            'outtmpl': raw_video,
-            'ffmpeg_location': ffmpeg_path,
-            'external_downloader': ffmpeg_path,
-            'external_downloader_args': ['-ss', '00:00:10', '-to', '00:01:10'],
-        }
+       ydl_opts = {
+    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+    'outtmpl': raw_video,
+    'ffmpeg_location': ffmpeg_path,
+    'quiet': True,
+    'no_warnings': True,
+}
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([req.bg_youtube_url])
